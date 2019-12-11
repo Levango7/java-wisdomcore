@@ -18,6 +18,7 @@ import org.wisdom.core.state.State;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 投票事务
@@ -31,6 +32,7 @@ public class ProposersState implements State<ProposersState> {
     public static Logger logger = LoggerFactory.getLogger(ProposersState.class);
     private static final long MINIMUM_PROPOSER_MORTGAGE = 100000 * EconomicModel.WDC;
     private static final int MAXIMUM_PROPOSERS = getenv("MAXIMUM_PROPOSERS", 15);
+    public static final int COMMUNITY_MINER_JOINS_HEIGHT = getenv("COMMUNITY_MINER_JOINS_HEIGHT", 522215);
 
     // 投票数每次衰减 10%
     private static final BigFraction ATTENUATION_COEFFICIENT = new BigFraction(9, 10);
@@ -97,12 +99,16 @@ public class ProposersState implements State<ProposersState> {
             votesCache = null;
         }
 
-        public long getVotes() {
+        public long getAmount() {
             if (votesCache != null) {
                 return votesCache;
             }
-            this.votesCache = receivedVotes.values().stream().map(v -> v.accumulated).reduce(Long::sum).orElse(0L);
+            this.votesCache = receivedVotes.values().stream().map(v -> v.amount).reduce(Long::sum).orElse(0L);
             return this.votesCache;
+        }
+
+        public long getAccumulated() {
+            return receivedVotes.values().stream().map(v -> v.accumulated).reduce(Long::sum).orElse(0L);
         }
 
         public Map<String, Vote> getReceivedVotes() {
@@ -124,12 +130,9 @@ public class ProposersState implements State<ProposersState> {
                 Vote v2 = new Vote(v.from, v.amount, new BigFraction(receivedVotes.get(k).accumulated, 1L)
                         .multiply(ATTENUATION_COEFFICIENT)
                         .longValue());
-                if (v2.accumulated == 0) {
-                    receivedVotes.remove(k);
-                    continue;
-                }
                 receivedVotes.put(k, v2);
             }
+
         }
 
         void updateTransaction(Transaction tx) {
@@ -171,8 +174,8 @@ public class ProposersState implements State<ProposersState> {
         return all;
     }
 
-    public Set<String> getBlockList() {
-        return blockList;
+    public Stream<Proposer> getBlockList() {
+        return blockList.stream().map(x -> all.get(x));
     }
 
     private Map<String, Proposer> all;
@@ -231,8 +234,8 @@ public class ProposersState implements State<ProposersState> {
     }
 
     private static int compareProposer(Proposer x, Proposer y) {
-        if (x.getVotes() != y.getVotes()) {
-            return Long.compare(x.getVotes(), y.getVotes());
+        if (x.getAccumulated() != y.getAccumulated()) {
+            return Long.compare(x.getAccumulated(), y.getAccumulated());
         }
         if (x.mortgage != y.mortgage) {
             return Long.compare(x.mortgage, y.mortgage);
@@ -272,6 +275,12 @@ public class ProposersState implements State<ProposersState> {
             }
             logger.info("block the proposer " + proposers.get(i));
             blockList.add(proposers.get(i));
+        }
+        // delete all block list after community miner joins
+        if (blocks.stream().anyMatch(b -> b.getnHeight() >= COMMUNITY_MINER_JOINS_HEIGHT
+                && blocks.stream().anyMatch(x -> x.getnHeight() < COMMUNITY_MINER_JOINS_HEIGHT))
+        ) {
+            blockList.clear();
         }
         // 重新生成 proposers
         proposers = all.values().stream()
@@ -318,5 +327,11 @@ public class ProposersState implements State<ProposersState> {
         }
         state.proposers = new ArrayList<>(proposers);
         return state;
+    }
+
+    public Optional<Long> getAccumulatedByTransactionHash(byte[] transactionHash) {
+        String txHash = Hex.encodeHexString(transactionHash);
+        return all.values().stream().filter(x -> x.receivedVotes.containsKey(txHash))
+                .map(x -> x.receivedVotes.get(txHash)).findFirst().map(x -> x.accumulated);
     }
 }

@@ -11,14 +11,11 @@ import org.wisdom.account.PublicKeyHash;
 import org.wisdom.consensus.pow.EconomicModel;
 import org.wisdom.consensus.pow.ProposersState;
 import org.wisdom.core.Block;
-import org.wisdom.core.account.Transaction;
 import org.wisdom.db.AccountState;
 import org.wisdom.db.StateDB;
 import org.wisdom.encoding.JSONEncodeDecoder;
-import org.wisdom.keystore.crypto.PublicKey;
 import org.wisdom.p2p.Peer;
 import org.wisdom.p2p.PeerServer;
-import org.wisdom.p2p.PeersManager;
 import org.wisdom.util.Address;
 
 import java.util.*;
@@ -108,15 +105,18 @@ public class NodeInfoController {
         }
         ProposersState proposersState = stateDB.getProposersFactory().getInstance(best);
         res.put("proposers", proposersState.getProposers().stream().map(p -> p.publicKeyHash).toArray());
-        res.put("blockList", proposersState.getBlockList());
-        res.put("votes", proposersState.getCandidates().stream().map(c -> {
-            Map<String, Object> m = new HashMap<>();
-            m.put("publicKeyHash", c.publicKeyHash);
-            m.put("votes", c.getVotes());
-            m.put("mortgage", c.mortgage);
-            return m;
-        }).toArray());
+        res.put("blockList", proposersState.getBlockList().map(this::toProposer));
+        res.put("votes", proposersState.getCandidates().stream().map(this::toProposer).toArray());
         return res;
+    }
+
+    private Map<String, Object> toProposer(ProposersState.Proposer p){
+        Map<String, Object> m = new HashMap<>();
+        m.put("publicKeyHash", p.publicKeyHash);
+        m.put("amount", p.getAmount());
+        m.put("mortgage", p.mortgage);
+        m.put("accumulated", p.getAccumulated());
+        return m;
     }
 
     @GetMapping(value = "/account/{account}", produces = APPLICATION_JSON_VALUE)
@@ -175,8 +175,17 @@ public class NodeInfoController {
                             if (y.address == null) return x;
                             return new Vote(x.address, x.amount + y.amount, x.accumulated + y.accumulated);
                         })
-                ));
+                )).values();
+    }
 
+    @GetMapping(value = "/getAccumulatedByTransactionHash/{transactionHash}", produces = APPLICATION_JSON_VALUE)
+    public Object getAccumulatedByAddress(@PathVariable("transactionHash") String transactionHash) throws Exception{
+        Block best = stateDB.getBestBlock();
+        ProposersState state = stateDB.getProposersFactory().getInstance(best);
+        Map<String, Object> res = new HashMap<>();
+        res.put("transactionHash", transactionHash);
+        res.put("accumulated", state.getAccumulatedByTransactionHash(Hex.decodeHex(transactionHash)).orElse(0L));
+        return res;
     }
 
     private static class Account {
